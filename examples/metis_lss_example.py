@@ -9,7 +9,7 @@ from pyreduce import datasets
 
 
 # define parameters
-instrument = "METIS"
+instrument = "METIS_LSS"
 target = ""
 night = ""
 mode = "LSS_M"  # LSS_M (settings_metis.json is now optimized for LSS_M mode)
@@ -37,7 +37,7 @@ steps = (
 # The data can be fetched from https://www.dropbox.com/sh/h1dz80vsw4lwoel/AAAqJD_FGDGC-t12wgnPXVR8a?dl=0 and stored in /raw/
 
 #laptop
-base_dir = "/Users/Nadeen/Dropbox/WORKING/iMETIS/Working/WORKING_PyReduce/DATA/datasets/METIS/" # an example path which you should change to your prefereed one 
+base_dir = "/Users/janus/Code/python/pyreduce_tests/datasets/METIS/" # an example path which you should change to your prefereed one
 #PC
 # base_dir ="/media/data/Dropbox/Dropbox/WORKING/iMETIS/Working/WORKING_PyReduce/DATA/datasets/METIS/"
 

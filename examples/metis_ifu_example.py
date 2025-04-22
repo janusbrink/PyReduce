@@ -12,7 +12,7 @@ from pyreduce import datasets
 instrument = "METIS_IFU"
 target = ""
 night = ""
-mode = "NOMINAL"  # LSS_M (settings_metis.json is now optimized for LSS_M mode)
+mode = "IFU_NOMINAL"  # LSS_M (settings_metis.json is now optimized for LSS_M mode)
 steps = (
      # "bias",
      #"flat",
@@ -37,7 +37,7 @@ steps = (
 # The da://neon.physics.uu.se/metis/lms_pinholes.fitsta can be fetched from https://www.dropbox.com/sh/h1dz80vsw4lwoel/AAAqJD_FGDGC-t12wgnPXVR8a?dl=0 and stored in /raw/
 
 #laptop
-base_dir = "/Users/Nadeen/Dropbox/WORKING/iMETIS/Working/WORKING_PyReduce/DATA/datasets/METIS/" # an example path which you should change to your prefereed one
+base_dir = "/Users/janus/Code/python/pyreduce_tests/datasets/METIS/" # an example path which you should change to your prefereed one
 #PC
 # base_dir ="/media/data/Dropbox/Dropbox/WORKING/iMETIS/Working/WORKING_PyReduce/DATA/datasets/METIS/"
 

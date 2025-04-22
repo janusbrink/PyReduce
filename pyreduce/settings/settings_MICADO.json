@@ -4,7 +4,7 @@
         "bias_scaling": "number_of_files"
     },
     "orders": {
-        "degree": 5,
+        "degree": 3,
         "degree_before_merge": "best",
         "bias_scaling": "exposure_time",
         "filter_size": 300,
