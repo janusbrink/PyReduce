@@ -9,14 +9,14 @@
 	"IFU_NOMINAL",
 	"IFU_EXTENDED" 
     ],
-    "kw_modes": "INSTMODE",
+    "kw_modes": "HIERARCH ESO INS MODE",
     "id_modes": [
 	"ifu_nom",
 	"ifu_ext"
     ],
     "extension": 0,
     "orientation": [
-        1,
+        0,
         1,
         1
     ],
@@ -54,7 +54,7 @@
     "kw_spec": "HIERARCH ESO DPR TYPE",
     "id_bias": "DARK",
     "id_flat": "LAMP,FLAT",
-    "id_orders": "FLAT,PINHOLE",
+    "id_orders": "LAMP,FLAT",
     "id_curvature": "SKY,WAVE",
     "id_scatter": "LAMP,FLAT",
     "id_wave": "SKY,WAVE",
