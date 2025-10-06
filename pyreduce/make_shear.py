@@ -232,7 +232,7 @@ class Curvature:
         y = np.arange(-xwd[0], xwd[1] + 1)[:, None] - ycen[xmin:xmax][None, :]
 
         x = x[None, :]
-        idx = make_index(ycen_int - xwd[0], ycen_int + xwd[1], xmin, xmax)
+        idx, imask = make_index(ycen_int - xwd[0], ycen_int + xwd[1], xmin, xmax)
         img = original[idx]
         img_compressed = np.ma.compressed(img)
 
@@ -295,6 +295,7 @@ class Curvature:
         # plt.subplot(122)
         # plt.imshow(model, vmin=vmin, vmax=vmax, origin="lower")
         # plt.plot(x, y, "r", label="curvature")
+        # plt.xlim((-0.5, model.shape[1] - 0.5))
         # plt.ylim((-0.5, model.shape[0] - 0.5))
         # plt.title("Model")
         # plt.xlabel("x [pixel]")
@@ -302,9 +303,9 @@ class Curvature:
 
         # plt.show()
 
-        if self.plot >= 2:
-            model = res.fun.reshape(img.shape) + img
-            self.progress.update_plot2(img, model, tilt, shear, res.x[1] - xmin)
+        # if self.plot >= 2:
+        #     model = res.fun.reshape(img.shape) + img
+        #     self.progress.update_plot2(img, model, tilt, shear, res.x[1] - xmin)
 
         return tilt, shear
 
@@ -523,7 +524,7 @@ class Curvature:
             yb = ycen - self.extraction_width[i, 0]
             yt = ycen + self.extraction_width[i, 1]
             xl, xr = self.column_range[i]
-            index = make_index(yb, yt, xl, xr)
+            index, imask = make_index(yb, yt, xl, xr)
             yl = pos[i]
             yr = pos[i] + index[0].shape[0]
             output[yl:yr, xl:xr] = original[index]

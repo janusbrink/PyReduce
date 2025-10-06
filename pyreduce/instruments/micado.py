@@ -35,7 +35,7 @@ class MICADO(Instrument):
         return header
 
     def get_extension(self, header, mode):
-        extension=5
+        extension=4
 
         return extension
 

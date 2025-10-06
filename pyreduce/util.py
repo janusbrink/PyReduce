@@ -189,7 +189,7 @@ def cutout_image(img, ymin, ymax, xmin, xmax):
     return cutout
 
 
-def make_index(ymin, ymax, xmin, xmax, zero=0):
+def make_index(ymin, ymax, xmin, xmax, zero=0, imdim=None):
     """Create an index (numpy style) that will select part of an image with changing position but fixed height
 
     The user is responsible for making sure the height is constant, otherwise it will still work, but the subsection will not have the desired format
@@ -206,21 +206,27 @@ def make_index(ymin, ymax, xmin, xmax, zero=0):
         rightmost colum
     zero : bool, optional
         if True count y array from 0 instead of xmin (default: False)
+    imdim : tuple(int, int), optional
+        dimensions of the image to mask out-of-bound indices (default: None)
 
     Returns
     -------
     index : tuple(array[height, width], array[height, width])
         numpy index for the selection of a subsection of an image
+    mask : array[height, width] (bool)
+        mask of valid indices (if imdim is given)
     """
 
     # TODO
     # Define the indices for the pixels between two y arrays, e.g. pixels in an order
     # in x: the rows between ymin and ymax
     # in y: the column, but n times to match the x index
-    ymin = np.asarray(ymin, dtype=int)
-    ymax = np.asarray(ymax, dtype=int)
+    ymin = np.asarray(np.floor(ymin), dtype=int)
+    ymax = np.asarray(np.floor(ymax), dtype=int)
     xmin = int(xmin)
     xmax = int(xmax)
+
+    logger.info(f"Make index: y_box=({ymin[xmin]}, {ymax[xmin]}) at x={xmin} to ({ymin[xmax]}, {ymax[xmax]}) a x={xmax}")
 
     if zero:
         zero = xmin
@@ -234,9 +240,24 @@ def make_index(ymin, ymax, xmin, xmax, zero=0):
             for col in range(xmin - zero, xmax - zero)
         ]
     )
+
+    # mask out-of-bound indices and create valid-indices mask
+    if imdim:
+        nrow, _ = imdim
+        mask_u = index_x >= nrow  # mask of out-of-bounds indices
+        mask_l = index_x < 0      
+        index_x[mask_u] = nrow - 1 # clip out-of-bounds indices to the image border
+        index_x[mask_l] = 0
+        # mask = ~(mask_u | mask_l) # return valid-index mask
+        mask = np.ones(index_x.shape, dtype=bool)
+    else:
+        mask = np.ones(index_x.shape, dtype=bool)
+
     index = index_x.T, index_y.T + zero
 
-    return index
+    # logger.info(f"imdim={imdim}, mask= {np.sum(~mask)} invalid pixels")
+
+    return index, mask.T
 
 
 def gridsearch(func, grid, args=(), kwargs={}):

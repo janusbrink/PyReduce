@@ -702,6 +702,7 @@ def extract_spectrum(
     if normalize:
         norm_img = [None] * nswath
         norm_model = [None] * nswath
+        logger.info(f"extract_spectrum(): {threshold = }, {gain = }")
 
     # Perform slit decomposition within each swath stepping through the order with
     # half swath width. Spectra for each decomposition are combined with linear weights.
@@ -715,8 +716,8 @@ def extract_spectrum(
             logger.debug("Extracting Swath %i, Columns: %i - %i", ihalf, ibeg, iend)
 
             # Cut out swath from image
-            index = make_index(ycen_int - ylow, ycen_int + yhigh, ibeg, iend)
-            swath_img = img[index]
+            index, imask = make_index(ycen_int - ylow, ycen_int + yhigh, ibeg, iend, imdim=img.shape)
+            swath_img = np.where(imask, img[index], 0)
             swath_ycen = ycen[ibeg:iend]
 
             # Corrections
@@ -732,6 +733,10 @@ def extract_spectrum(
                 scatter_correction = 0
 
             swath_img -= scatter_correction + telluric_correction
+
+            # re-apply mask
+            swath_img = np.where(imask, swath_img, 0)
+            # tilt = None
 
             # Do Slitfunction extraction
             swath_tilt = tilt[ibeg:iend] if tilt is not None else 0
@@ -753,7 +758,7 @@ def extract_spectrum(
             if normalize:
                 # Save image and model for later
                 # Use np.divide to avoid divisions by zero
-                where = swath.model[ihalf] > threshold / gain
+                where = (swath.model[ihalf] > threshold / gain) & imask
                 norm_img[ihalf] = np.ones_like(swath.model[ihalf])
                 np.divide(
                     np.abs(swath_img),
@@ -826,9 +831,9 @@ def extract_spectrum(
 
     if normalize:
         for i, (ibeg, iend) in enumerate(zip(bins_start, bins_end)):
-            index = make_index(ycen_int - ylow, ycen_int + yhigh, ibeg, iend)
-            im_norm[index] += norm_img[i] * weight[i]
-            im_ordr[index] += norm_model[i] * weight[i]
+            index, imask = make_index(ycen_int - ylow, ycen_int + yhigh, ibeg, iend, imdim=im_norm.shape)
+            im_norm[index] += np.where(imask, norm_img[i] * weight[i], 0)
+            im_ordr[index] += np.where(imask, norm_model[i] * weight[i], 0)
 
     slitf[:] = np.mean(swath.slitf, axis=0)
     sunc[:] = np.sqrt(sunc ** 2 + (readnoise / gain) ** 2)
@@ -955,7 +960,8 @@ def optimal_extraction(
 
         # Define a fixed height area containing one spectral order
         ycen = np.polyval(orders[i], ix)
-        yrange = get_y_scale(ycen, column_range[i], extraction_width[i], nrow)
+        # yrange = get_y_scale(ycen, column_range[i], extraction_width[i], nrow)
+        yrange = extraction_width[i]
 
         osample = kwargs.get("osample", 1)
         slitfunction[i] = np.zeros(osample * (sum(yrange) + 2) + 1)
@@ -1117,8 +1123,8 @@ def arc_extraction(
         ycen = np.polyval(orders[i], x).astype(int)
         yb, yt = ycen - extraction_width[i, 0], ycen + extraction_width[i, 1]
         height = extraction_width[i, 0] + extraction_width[i, 1] + 1
-        index = make_index(yb, yt, x_left_lim, x_right_lim)
-        img_order = img[index]
+        index, imask = make_index(yb, yt, x_left_lim, x_right_lim, imdim=img.shape)
+        img_order = np.where(imask, img[index], 0)
 
         # Correct for tilt and shear
         # For each row of the rectified order, interpolate onto the shifted row
@@ -1177,10 +1183,10 @@ def plot_comparison(
         yb = ycen - extraction_width[i, 0]
         yt = ycen + extraction_width[i, 1]
         xl, xr = column_range[i]
-        index = make_index(yb, yt, xl, xr)
+        index, imask = make_index(yb, yt, xl, xr, imdim=(nrow, ncol))
         yl = pos[i]
         yr = pos[i] + index[0].shape[0]
-        output[yl:yr, xl:xr] = original[index]
+        output[yl:yr, xl:xr] = np.where(imask, original[index], 0)
 
         vmin, vmax = np.percentile(output[yl:yr, xl:xr], (5, 95))
         output[yl:yr, xl:xr] = np.clip(output[yl:yr, xl:xr], vmin, vmax)
@@ -1249,7 +1255,7 @@ def extract(
     extraction_width : array[nord, 2]({float, int}), optional
         extraction width above and below each order, values below 1.5 are considered relative, while values above are absolute (default: 0.5)
     extraction_type : {"optimal", "arc", "normalize"}, optional
-        which extracttion algorithm to use, "optimal" uses optimal extraction, "arc" uses simple arc extraction, and "normalize" also uses optimal extraction, but returns the normalized image (default: "optimal")
+        which extraction algorithm to use, "optimal" uses optimal extraction, "arc" uses simple arc extraction, and "normalize" also uses optimal extraction, but returns the normalized image (default: "optimal")
     tilt : float or array[nord, ncol], optional
         The tilt (1st order curvature) of the slit for curved extraction. Will use vertical extraction if no tilt is set. (default: None, i.e. tilt = 0)
     shear : float or array[nord, ncol], optional
@@ -1289,7 +1295,7 @@ def extract(
 
     # Fix the input parameters
     extraction_width, column_range, orders = fix_parameters(
-        extraction_width, column_range, orders, nrow, ncol, nord
+        extraction_width, column_range, orders, nrow, ncol, nord, ignore_column_range=True
     )
     # Limit orders (and related properties) to orders in range
     nord = order_range[1] - order_range[0]
@@ -1342,6 +1348,7 @@ def extract(
             **kwargs,
         )
         threshold_lower = kwargs.get("threshold_lower", 0)
+        logger.info(f"extract(): {threshold_lower = }")
         im_norm[im_norm <= threshold_lower] = 1
         im_ordr[im_ordr <= threshold_lower] = 1
         return im_norm, im_ordr, blaze, column_range

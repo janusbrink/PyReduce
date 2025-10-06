@@ -932,7 +932,7 @@ class NormalizeFlatField(Step):
         else:
             threshold = self.threshold
 
-        norm, _, blaze, _ = extract(
+        norm, ordr, blaze, _ = extract(
             flat,
             orders,
             gain=fhead["e_gain"],
@@ -953,10 +953,16 @@ class NormalizeFlatField(Step):
 
         blaze = np.ma.filled(blaze, 0)
         norm = np.nan_to_num(norm, nan=1)
-        self.save(norm, blaze)
+        ordr = np.nan_to_num(ordr, nan=1)
+
+        if self.plot:
+            plt.imshow(norm, origin="lower", aspect="auto")
+            plt.show()
+
+        self.save(norm, ordr, blaze)
         return norm, blaze
 
-    def save(self, norm, blaze):
+    def save(self, norm, ordr, blaze):
         """Save normalized flat field results to disk
 
         Parameters
@@ -966,7 +972,7 @@ class NormalizeFlatField(Step):
         blaze : array of shape (nord, ncol)
             Continuum level as determined from the flat field for each order
         """
-        np.savez(self.savefile, blaze=blaze, norm=norm)
+        np.savez(self.savefile, blaze=blaze, norm=norm, ordr=ordr)
         logger.info("Created normalized flat file: %s", self.savefile)
 
     def load(self):

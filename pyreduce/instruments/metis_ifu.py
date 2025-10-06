@@ -35,7 +35,7 @@ class METIS_IFU(InstrumentWithModes):
         return header
 
     def get_extension(self, header, mode):
-        extension=1
+        extension=4
 
         return extension
 
