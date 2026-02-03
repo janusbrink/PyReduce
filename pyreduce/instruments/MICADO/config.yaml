@@ -9,8 +9,8 @@ date: MJD-OBS
 date_format: mjd
 
 channels: [SPEC]  # janus: renamed from NIR
-kw_channel: "ESO DET CHIP*NAME"
-id_channel: [Hawaii4RG]
+kw_channel: "HIERARCH ESO INS MODE"
+id_channel: [spec]
 extension: 0
 orientation: [1]
 
