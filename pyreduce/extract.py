@@ -1887,7 +1887,8 @@ def extract_normalize(
     traces_arr = np.array([t.pos for t in traces])
     column_range = np.array([list(t.column_range) for t in traces], dtype=np.int32)
     heights = np.array(
-        [t.height if t.height is not None else extraction_height for t in traces]
+        # [t.height if t.height is not None else extraction_height for t in traces]
+        [extraction_height for t in traces] # always use settings for MICADO
     )
 
     # Build curvature arrays
