@@ -1612,7 +1612,7 @@ class WavelengthCalibrationInitialize(Step):
 
     def run(self, wavecal_master):
         wavecal_spec, thead = wavecal_master
-
+        """
         Parameters
         ----------
         wavecal_master : dict[str, tuple]
