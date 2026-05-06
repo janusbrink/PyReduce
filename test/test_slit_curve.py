@@ -502,10 +502,10 @@ def test_curvature(original, traces, trace_range, settings):
     curvature = module.execute(original)
 
     assert curvature is not None
-    assert curvature.coeffs.ndim == 3
-    assert curvature.coeffs.shape[0] == trace_range[1] - trace_range[0]
-    assert curvature.coeffs.shape[1] == original.shape[1]
-    assert curvature.degree == 1
+    assert curvature["coeffs"].ndim == 3
+    assert curvature["coeffs"].shape[0] == trace_range[1] - trace_range[0]
+    assert curvature["coeffs"].shape[1] == original.shape[1]
+    assert curvature["degree"] == 1
 
 
 @pytest.mark.slow

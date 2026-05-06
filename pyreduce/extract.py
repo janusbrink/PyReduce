@@ -27,21 +27,29 @@ from .util import make_index
 
 logger = logging.getLogger(__name__)
 
-# Backend selection: set PYREDUCE_USE_CHARSLIT=1 to use charslit
-USE_CHARSLIT = os.environ.get("PYREDUCE_USE_CHARSLIT", "0") == "1"
-# Slitdelta correction: set PYREDUCE_USE_DELTAS=0 to disable (default enabled)
-USE_DELTAS = os.environ.get("PYREDUCE_USE_DELTAS", "1") == "1"
+# Backend selection: set PYREDUCE_USE_CHARSLIT=1 to use charslit.
+# Checked at call time so env var changes within a process take effect.
+_charslit_mod = None
 
-if USE_CHARSLIT:
-    import charslit
 
-    logger.info("Using charslit extraction backend")
-    if not USE_DELTAS:
-        logger.info("Slitdelta correction disabled (PYREDUCE_USE_DELTAS=0)")
-else:
-    from . import cwrappers
+def _use_charslit():
+    return os.environ.get("PYREDUCE_USE_CHARSLIT", "0") == "1"
 
-    logger.info("Using CFFI extraction backend")
+
+def _use_deltas():
+    return os.environ.get("PYREDUCE_USE_DELTAS", "1") == "1"
+
+
+def _get_charslit():
+    global _charslit_mod
+    if _charslit_mod is None:
+        import charslit
+
+        _charslit_mod = charslit
+    return _charslit_mod
+
+
+from . import cwrappers
 
 
 def _slitdec_charslit(
@@ -139,7 +147,7 @@ def _slitdec_charslit(
         logger.debug("preset_slitfunc is not yet supported by charslit, ignoring")
 
     # Call charslit
-    result = charslit.slitdec(
+    result = _get_charslit().slitdec(
         data,
         pix_unc,
         mask_c,
@@ -437,7 +445,7 @@ class ProgressPlot:  # pragma: no cover
         x_slit, y_slit = self.get_slitf(img, spec, slitf, ycen, slitcurve, slitdeltas)
         ycen = ycen + ny / 2
 
-        old = np.linspace(-1, ny, len(slitf))
+        old = np.linspace(-1, ny, len(slitf)) + 0.5
 
         # Separate rejected (output_mask=True) and good (output_mask=False) pixels
         rejected = output_mask.ravel()
@@ -528,7 +536,7 @@ class ProgressPlot:  # pragma: no cover
         if not np.isnan(limit):
             self.ax_spec.set_ylim((0, limit))
 
-        self.ax_slit.set_ylim((0, ny - 1))
+        self.ax_slit.set_ylim((0, ny))
         limit = np.nanmax(slitf) * 1.1
         if not np.isnan(limit):
             self.ax_slit.set_xlim((0, limit))
@@ -591,7 +599,7 @@ class ProgressPlot:  # pragma: no cover
         ycen_frac = ycen - ycen.astype(int)
 
         # Slit position for display
-        slit_pos = row_idx - ycen_frac + 0.5
+        slit_pos = row_idx - ycen_frac + 1
 
         # Compute effective column position for spectrum lookup
         col_eff = col_idx.astype(float)
@@ -803,6 +811,57 @@ def fix_extraction_height(xwd, traces, cr, ncol):
     xwd = np.ceil(xwd).astype(int)
 
     return xwd
+
+
+def validate_traces_for_extraction(
+    traces: list[Trace],
+    extraction_height: float | np.ndarray,
+    nrow: int,
+    ncol: int,
+) -> None:
+    """Validate traces and mark invalid ones.
+
+    Checks if each trace's extraction aperture fits within the image bounds.
+    Invalid traces are marked with trace.invalid = "reason".
+
+    Parameters
+    ----------
+    traces : list[Trace]
+        Trace objects to validate. Modified in-place.
+    extraction_height : float or array
+        Extraction height(s) in pixels.
+    nrow : int
+        Number of rows in image.
+    ncol : int
+        Number of columns in image.
+    """
+    ix = np.arange(ncol)
+
+    for i, trace in enumerate(traces):
+        if trace.invalid:
+            continue
+
+        if isinstance(extraction_height, np.ndarray):
+            height = extraction_height[i]
+        elif extraction_height is not None:
+            height = extraction_height
+        else:
+            height = trace.height if trace.height is not None else 0.5
+        half = height / 2
+
+        # Check if extraction aperture stays within image
+        y_cen = np.polyval(trace.pos, ix)
+        y_bot = y_cen - half
+        y_top = y_cen + half
+
+        # Find columns where aperture is fully within image
+        col_start, col_end = trace.column_range
+        valid_cols = np.where((y_bot >= 0) & (y_top < nrow))[0]
+        valid_cols = valid_cols[(valid_cols >= col_start) & (valid_cols < col_end)]
+
+        if len(valid_cols) == 0:
+            trace.invalid = f"extraction height {height:.1f}px exceeds image bounds"
+            logger.warning("Trace %d: %s, marking invalid", i, trace.invalid)
 
 
 def fix_column_range(column_range, traces, extraction_height, nrow, ncol):
@@ -1116,7 +1175,7 @@ def extract_spectrum(
         )
 
     # CFFI backend only supports curvature degree <= 2; truncate if needed
-    if not USE_CHARSLIT and curvature is not None and curvature.shape[1] > 3:
+    if not _use_charslit() and curvature is not None and curvature.shape[1] > 3:
         logger.warning(
             "curve_degree > 2 requires charslit backend. "
             "Truncating to degree 2. Set PYREDUCE_USE_CHARSLIT=1 for full curvature support."
@@ -1181,7 +1240,7 @@ def extract_spectrum(
 
             # Prepare curvature for both backends and visualization
             slitcurve = _ensure_slitcurve(swath_curv, swath_ncols)
-            if USE_DELTAS and slitdeltas is not None and len(slitdeltas) > 0:
+            if _use_deltas() and slitdeltas is not None and len(slitdeltas) > 0:
                 # Interpolate slitdeltas to match swath nrows if needed
                 if len(slitdeltas) == swath_nrows:
                     swath_slitdeltas = slitdeltas.astype(np.float64)
@@ -1193,7 +1252,7 @@ def extract_spectrum(
             else:
                 swath_slitdeltas = None
 
-            if USE_CHARSLIT:
+            if _use_charslit():
                 charslit_slitdeltas = (
                     swath_slitdeltas
                     if swath_slitdeltas is not None
@@ -1344,15 +1403,19 @@ def get_y_scale(ycen, xrange, extraction_height, nrow):
 
     Returns
     -------
-    y_low, y_high : int, int
+    ylow, yhigh : int, int
         lower and upper y bound for extraction (pixels below/above trace)
-        These satisfy: y_low + y_high + 1 = extraction_height
+        These satisfy: ylow + yhigh + 1 = extraction_height
     """
-    ycen = ycen[xrange[0] : xrange[1]]
+    ycen = ycen[xrange[0] : xrange[1]].copy()
     half = extraction_height // 2
 
-    ymin = ycen - half
-    ymin = np.floor(ymin)
+    if extraction_height % 2 == 0:
+        ycen += 1
+    else:
+        ycen += 0.5
+    ymin = np.floor(ycen - half).astype(int)
+
     if min(ymin) < 0:
         ymin = ymin - min(ymin)  # help for orders at edge
     if max(ymin) >= nrow:
@@ -1363,11 +1426,10 @@ def get_y_scale(ycen, xrange, extraction_height, nrow):
         ymax = ymax - max(ymax) + nrow - 1  # helps at edge
         ymin = ymax - extraction_height + 1
 
-    # Define a fixed height area containing one spectral order
-    y_lower_lim = int(np.min(ycen - ymin))  # Pixels below center line
-    y_upper_lim = int(np.min(ymax - ycen))  # Pixels above center line
+    ylow = int(np.min(ycen - ymin))  # Pixels below center line
+    yhigh = extraction_height - 1 - ylow  # Guarantee total = extraction_height
 
-    return y_lower_lim, y_upper_lim
+    return ylow, yhigh
 
 
 def optimal_extraction(
@@ -1446,6 +1508,10 @@ def optimal_extraction(
         # Define a fixed height area containing one trace
         ycen = np.polyval(traces[i], ix)
         yrange = get_y_scale(ycen, column_range[i], extraction_height[i], nrow)
+        # Shift ycen so floor() rounds to nearest integer, centering the trace
+        # in the extraction window (sub-pixel offset near 0 instead of biased to +1)
+        cr = column_range[i]
+        ycen[cr[0] : cr[1]] += 0.5 if extraction_height[i] % 2 == 1 else 1
 
         osample = kwargs.get("osample", 1)
         slitfunction[i] = np.zeros(osample * (sum(yrange) + 2) + 1)

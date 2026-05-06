@@ -46,8 +46,10 @@ def pytest_addoption(parser):
 def tempfiles():
     n = 10
     files = [tempfile.NamedTemporaryFile(delete=False) for _ in range(n)]
-    files = [f.name for f in files]
-    yield files
+    names = [f.name for f in files]
+    for f in files:
+        f.close()
+    yield names
 
     for f in files:
         try:
@@ -721,6 +723,7 @@ def spec(step_args, settings, files, bias, traces, normflat, scatter, mask):
     settings["plot"] = False
 
     step = ScienceExtraction(*step_args, **settings)
+    step.files = files
 
     try:
         heads, specs, sigmas, slitfus, column_ranges = step.load(files)

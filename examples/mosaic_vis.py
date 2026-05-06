@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.13"
-# dependencies = ["pyreduce-astro>=0.7"]
-# ///
 """
 MOSAIC VIS spectrograph example.
 
@@ -27,19 +23,19 @@ from pyreduce.pipeline import Pipeline
 instrument_name = "MOSAIC"
 target = "MOSAIC_VIS"
 night = ""
-channel = "VIS4"
-plot = 1
+channel = "VIS1"
+plot = 2
+
+# Data location
+data_dir = "/disk/miri-b1/jeand/mosaic/virtualmosaic/simdata"
+base_dir = join(data_dir, "VIS")
+output_dir = join(data_dir, "reduced", channel)
 
 # Handle plot environment variables
 if "PYREDUCE_PLOT" in os.environ:
     plot = int(os.environ["PYREDUCE_PLOT"])
-plot_dir = os.environ.get("PYREDUCE_PLOT_DIR")
+plot_dir = join(data_dir, "pyreduce_plots", channel)
 util.set_plot_dir(plot_dir)
-
-# Data location
-data_dir = os.environ.get("REDUCE_DATA", os.path.expanduser("~/REDUCE_DATA"))
-base_dir = join(data_dir, "MOSAIC", "REF_E2E", "VIS")
-output_dir = join(data_dir, "MOSAIC", "reduced", channel)
 
 # File paths (simulated data)
 flat_file = join(
@@ -74,9 +70,10 @@ pipe = Pipeline(
 )
 
 # Run pipeline steps
-pipe.trace([flat_file])
-pipe.curvature([thar_file])
-pipe.norm_flat()
+# pipe.trace([flat_file])
+# pipe.curvature([thar_file])
+pipe.flat([flat_file])
+pipe.normalize_flat()
 pipe.wavecal_master([thar_file])
 pipe.wavecal_init()
 pipe.wavecal()

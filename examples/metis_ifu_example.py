@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.13"
-# dependencies = ["pyreduce-astro>=0.7"]
-# ///
 """
 Simple usage example for PyReduce
 Loads a simulated METIS dataset, and runs the full extraction
@@ -19,8 +15,8 @@ night = ""
 channel = "3.555_det1"
 steps = (
     # "bias",
-    "flat",
-    # "trace",
+    # "flat",
+    "trace",
     # "curvature",
     # "scatter",
     # "norm_flat",

@@ -40,6 +40,8 @@ import os
 from os.path import join
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from . import util
 from .configuration import load_config
 from .instruments.instrument_info import load_instrument
@@ -205,21 +207,23 @@ class Pipeline:
         """
         return self._add_step("trace", files)
 
-    def trace_raw(self, files: list[str]) -> tuple:
-        """Trace fibers/orders and return raw results without storing.
+    def trace_raw(self, files: list[str], order_centers: dict = None) -> list:
+        """Trace fibers/orders and return Trace objects without storing.
 
         Use this for multi-file tracing workflows where you need to combine
-        traces from multiple files before organizing.
+        traces from multiple files before grouping.
 
         Parameters
         ----------
         files : list[str]
             Files to use for tracing.
+        order_centers : dict[int, float], optional
+            Order number -> y-position mapping for m assignment.
 
         Returns
         -------
-        tuple
-            (traces, column_range) arrays
+        list[Trace]
+            Trace objects with fiber_idx set (individual fibers, not grouped).
         """
         from .trace import trace as trace_func
 
@@ -234,7 +238,11 @@ class Pipeline:
 
         order_img, _ = step.calibrate(files, mask, bias, None)
 
-        traces, column_range, heights = trace_func(
+        # Load order_centers from config if not provided
+        if order_centers is None:
+            order_centers = step._load_order_centers()
+
+        traces = trace_func(
             order_img,
             min_cluster=step.min_cluster,
             min_width=step.min_width,
@@ -255,24 +263,23 @@ class Pipeline:
             sigma=step.sigma,
             plot=self.plot,
             plot_title=step.plot_title,
+            order_centers=order_centers,
         )
 
-        return traces, column_range, heights
+        return traces
 
-    def organize(self, traces, column_range, *more) -> Pipeline:
+    def organize(self, traces: list, *more) -> Pipeline:
         """Organize traces into fiber groups based on instrument config.
 
         Use this after trace_raw() to apply fiber grouping configuration.
-        Can accept multiple trace sets which will be concatenated.
+        Can accept multiple trace lists which will be concatenated.
 
         Parameters
         ----------
-        traces : ndarray (n_traces, degree+1)
-            Polynomial coefficients for traces
-        column_range : ndarray (n_traces, 2)
-            Column ranges for traces
-        *more : additional (traces, column_range) pairs
-            Optional additional trace sets to concatenate
+        traces : list[Trace]
+            Trace objects from trace_raw()
+        *more : additional list[Trace]
+            Optional additional trace lists to concatenate
 
         Returns
         -------
@@ -281,45 +288,23 @@ class Pipeline:
 
         Example
         -------
-        >>> t1, cr1 = pipe.trace_raw([even_flat])
-        >>> t2, cr2 = pipe.trace_raw([odd_flat])
-        >>> pipe.organize(t1, cr1, t2, cr2)
+        >>> t1 = pipe.trace_raw([even_flat])
+        >>> t2 = pipe.trace_raw([odd_flat])
+        >>> pipe.organize(t1, t2)
         >>> pipe.extract([science_file]).run()
         """
-        import numpy as np
-
-        # Concatenate multiple trace sets if provided
-        if more:
-            all_traces = [traces]
-            all_cr = [column_range]
-            it = iter(more)
-            for t, cr in zip(it, it, strict=False):
-                all_traces.append(t)
-                all_cr.append(cr)
-            traces = np.vstack(all_traces)
-            column_range = np.vstack(all_cr)
-
-        # Compute per-trace heights
-        from .trace import compute_trace_heights
-
-        ncol = traces.shape[1] if hasattr(traces, "shape") else 4096  # fallback
-        # Get ncol from instrument if available
-        if hasattr(self.instrument, "config") and hasattr(
-            self.instrument.config, "naxis"
-        ):
-            ncol = self.instrument.config.naxis[0]
-        heights = compute_trace_heights(traces, column_range, ncol)
+        from .trace import group_fibers
 
         # Get config and context
         fibers_config = getattr(self.instrument.config, "fibers", None)
         inst_dir = getattr(self.instrument, "_inst_dir", None)
 
+        # Get config
+        fibers_config = getattr(self.instrument.config, "fibers", None)
         step_config = self.config.get("trace", {}).copy()
         degree = step_config.get("degree", 4)
 
-        # Organize into fiber groups if configured
-        group_counts = {}
-        group_heights = {}
+        # Group fibers if configured
         if fibers_config is not None and (
             fibers_config.groups is not None or fibers_config.bundles is not None
         ):
@@ -366,17 +351,6 @@ class Pipeline:
         step.save(traces, column_range)
 
         return self
-
-    def merge_traces(self, traces_a, column_range_a, traces_b, column_range_b):
-        """Deprecated: use organize() instead."""
-        import warnings
-
-        warnings.warn(
-            "merge_traces() is deprecated, use organize() instead",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.organize(traces_a, column_range_a, traces_b, column_range_b)
 
     def curvature(self, files: list[str] | None = None) -> Pipeline:
         """Determine slit curvature (p1/p2)."""
@@ -637,9 +611,11 @@ class Pipeline:
             "flat": lambda: pipe.flat(files.get("flat", []))
             if len(files.get("flat", []))
             else pipe,
-            "trace": lambda: pipe.trace(files.get("trace")),
-            "curvature": lambda: pipe.curvature(files.get("curvature")),
-            "scatter": lambda: pipe.scatter(files.get("scatter")),
+            "trace": lambda: pipe.trace(files.get("trace", files.get("flat"))),
+            "curvature": lambda: pipe.curvature(
+                files.get("curvature", files.get("flat"))
+            ),
+            "scatter": lambda: pipe.scatter(files.get("scatter", files.get("flat"))),
             "norm_flat": lambda: pipe.normalize_flat(),
             "wavecal_master": lambda: pipe.wavecal_master(
                 files.get("wavecal_master", [])
@@ -744,11 +720,18 @@ class Pipeline:
         util.set_plot_dir(plot_dir)
         util.set_plot_show(plot_show, plot_level=plot)
 
-        # Load configuration (channel-specific if settings_{channel}.json exists)
-        config = load_config(configuration, instrument, 0, channel=channel)
-
-        # Load instrument
+        # Load instrument (before config, so we can get settings fallbacks)
         inst = load_instrument(instrument)
+
+        # Load configuration (channel-specific if settings_{channel}.json exists)
+        channel_fallbacks = inst.get_settings_fallbacks(channel) if channel else None
+        config = load_config(
+            configuration,
+            instrument,
+            0,
+            channel=channel,
+            channel_fallbacks=channel_fallbacks,
+        )
         info = inst.info
 
         # Get directories from config if not specified

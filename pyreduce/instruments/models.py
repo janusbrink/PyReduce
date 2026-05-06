@@ -7,9 +7,12 @@ structure described in REDESIGN.md.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class HeaderRef(BaseModel):

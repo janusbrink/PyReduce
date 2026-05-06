@@ -58,96 +58,87 @@ class TestWhittakerSmooth:
 
 
 class TestComputeTraceHeights:
-    """Tests for compute_trace_heights function."""
+    """Tests for _compute_heights_inplace function."""
 
     @pytest.mark.unit
     def test_evenly_spaced_traces(self):
         """Test height computation for evenly spaced traces."""
-        # 5 traces spaced 20 pixels apart, constant across columns
-        traces = np.array(
-            [
-                [0.0, 0.0, 20.0],  # y = 20
-                [0.0, 0.0, 40.0],  # y = 40
-                [0.0, 0.0, 60.0],  # y = 60
-                [0.0, 0.0, 80.0],  # y = 80
-                [0.0, 0.0, 100.0],  # y = 100
-            ]
-        )
-        column_range = np.array([[0, 1000]] * 5)
+        from pyreduce.trace_model import Trace as TraceData
 
-        heights = trace.compute_trace_heights(traces, column_range, ncol=1000)
+        # 5 traces spaced 20 pixels apart
+        traces = [
+            TraceData(m=None, pos=np.array([0.0, 0.0, 20.0]), column_range=(0, 1000)),
+            TraceData(m=None, pos=np.array([0.0, 0.0, 40.0]), column_range=(0, 1000)),
+            TraceData(m=None, pos=np.array([0.0, 0.0, 60.0]), column_range=(0, 1000)),
+            TraceData(m=None, pos=np.array([0.0, 0.0, 80.0]), column_range=(0, 1000)),
+            TraceData(m=None, pos=np.array([0.0, 0.0, 100.0]), column_range=(0, 1000)),
+        ]
 
-        assert len(heights) == 5
+        trace._compute_heights_inplace(traces, ncol=1000)
+
         # First trace: distance to next neighbor = 20
-        assert heights[0] == pytest.approx(20.0, rel=0.01)
+        assert traces[0].height == pytest.approx(20.0, rel=0.01)
         # Middle traces: half distance between neighbors = 20
-        assert heights[1] == pytest.approx(20.0, rel=0.01)
-        assert heights[2] == pytest.approx(20.0, rel=0.01)
-        assert heights[3] == pytest.approx(20.0, rel=0.01)
+        assert traces[1].height == pytest.approx(20.0, rel=0.01)
+        assert traces[2].height == pytest.approx(20.0, rel=0.01)
+        assert traces[3].height == pytest.approx(20.0, rel=0.01)
         # Last trace: distance to previous neighbor = 20
-        assert heights[4] == pytest.approx(20.0, rel=0.01)
+        assert traces[4].height == pytest.approx(20.0, rel=0.01)
 
     @pytest.mark.unit
     def test_uneven_spacing(self):
         """Test height computation for unevenly spaced traces."""
-        # Traces with varying spacing
-        traces = np.array(
-            [
-                [0.0, 0.0, 10.0],  # y = 10
-                [0.0, 0.0, 30.0],  # y = 30 (spacing 20 above)
-                [0.0, 0.0, 90.0],  # y = 90 (spacing 60 above)
-            ]
-        )
-        column_range = np.array([[0, 1000]] * 3)
+        from pyreduce.trace_model import Trace as TraceData
 
-        heights = trace.compute_trace_heights(traces, column_range, ncol=1000)
+        traces = [
+            TraceData(m=None, pos=np.array([0.0, 0.0, 10.0]), column_range=(0, 1000)),
+            TraceData(m=None, pos=np.array([0.0, 0.0, 30.0]), column_range=(0, 1000)),
+            TraceData(m=None, pos=np.array([0.0, 0.0, 90.0]), column_range=(0, 1000)),
+        ]
+
+        trace._compute_heights_inplace(traces, ncol=1000)
 
         # First: distance to next = 20
-        assert heights[0] == pytest.approx(20.0, rel=0.01)
-        # Middle: half distance between neighbors = (90-10)/2 = 40
-        assert heights[1] == pytest.approx(40.0, rel=0.01)
+        assert traces[0].height == pytest.approx(20.0, rel=0.01)
+        # Middle: distance to nearest neighbor = min(20, 60) = 20
+        assert traces[1].height == pytest.approx(20.0, rel=0.01)
         # Last: distance to prev = 60
-        assert heights[2] == pytest.approx(60.0, rel=0.01)
+        assert traces[2].height == pytest.approx(60.0, rel=0.01)
 
     @pytest.mark.unit
     def test_single_trace(self):
-        """Single trace should return NaN (no neighbors)."""
-        traces = np.array([[0.0, 0.0, 50.0]])
-        column_range = np.array([[0, 1000]])
+        """Single trace should leave height as None (no neighbors)."""
+        from pyreduce.trace_model import Trace as TraceData
 
-        heights = trace.compute_trace_heights(traces, column_range, ncol=1000)
+        traces = [
+            TraceData(m=None, pos=np.array([0.0, 0.0, 50.0]), column_range=(0, 1000))
+        ]
 
-        assert len(heights) == 1
-        assert np.isnan(heights[0])
+        trace._compute_heights_inplace(traces, ncol=1000)
+
+        assert traces[0].height is None
 
     @pytest.mark.unit
     def test_empty_traces(self):
-        """Empty traces should return empty array."""
-        traces = np.array([]).reshape(0, 3)
-        column_range = np.array([]).reshape(0, 2)
-
-        heights = trace.compute_trace_heights(traces, column_range, ncol=1000)
-
-        assert len(heights) == 0
+        """Empty traces should be handled gracefully."""
+        trace._compute_heights_inplace([], ncol=1000)
+        # Just verify no exception is raised
 
     @pytest.mark.unit
     def test_varying_column_range(self):
         """Height uses max across valid reference columns."""
-        # Trace with curvature: y varies across x
-        # y = 0.001*x + 50 (slight slope)
-        traces = np.array(
-            [
-                [0.001, 50.0],  # y = 0.001*x + 50
-                [0.001, 70.0],  # y = 0.001*x + 70
-            ]
-        )
-        column_range = np.array([[100, 900], [100, 900]])
+        from pyreduce.trace_model import Trace as TraceData
 
-        heights = trace.compute_trace_heights(traces, column_range, ncol=1000)
+        traces = [
+            TraceData(m=None, pos=np.array([0.001, 50.0]), column_range=(100, 900)),
+            TraceData(m=None, pos=np.array([0.001, 70.0]), column_range=(100, 900)),
+        ]
+
+        trace._compute_heights_inplace(traces, ncol=1000)
 
         # Spacing is constant at 20 pixels regardless of x
-        assert heights[0] == pytest.approx(20.0, rel=0.01)
-        assert heights[1] == pytest.approx(20.0, rel=0.01)
+        assert traces[0].height == pytest.approx(20.0, rel=0.01)
+        assert traces[1].height == pytest.approx(20.0, rel=0.01)
 
 
 class TestFit:
@@ -879,12 +870,12 @@ class TestSelectTracesForStep:
 
         config = FibersConfig(
             groups={"A": FiberGroupConfig(range=(1, 6))},
-            use={"other_step": "groups"},  # no default, science not specified
+            use={"other_step": "per_fiber"},  # no default, science not specified
         )
 
         result = trace.select_traces_for_step(trace_objects, config, "science")
 
-        # Without default key, should fall back to "all"
+        # Without default key, should fall back to "groups"
         assert "all" in result
         assert len(result["all"]) == 10
 
@@ -1011,48 +1002,44 @@ class TestNoiseThreshold:
         """Test with only absolute noise threshold."""
         # Signal is 100 above background (1100 vs 1000)
         # With noise=50, signal should be detected (100 > 50)
-        result = trace.trace(
+        traces = trace.trace(
             simple_image,
             noise=50,
             noise_relative=0,
             manual=False,
         )
-        orders, column_range, heights = result
-        assert len(orders) >= 1
+        assert len(traces) >= 1
 
         # With noise=150, signal should NOT be detected (100 < 150)
-        result = trace.trace(
+        traces = trace.trace(
             simple_image,
             noise=150,
             noise_relative=0,
             manual=False,
         )
-        orders, column_range, heights = result
-        assert len(orders) == 0
+        assert len(traces) == 0
 
     @pytest.mark.unit
     def test_relative_noise_only(self, simple_image):
         """Test with only relative noise threshold."""
         # Background ~1000, signal 100 above (10% above background)
         # With noise_relative=0.05 (5%), signal should be detected
-        result = trace.trace(
+        traces = trace.trace(
             simple_image,
             noise=0,
             noise_relative=0.05,
             manual=False,
         )
-        orders, column_range, heights = result
-        assert len(orders) >= 1
+        assert len(traces) >= 1
 
         # With noise_relative=0.15 (15%), signal should NOT be detected
-        result = trace.trace(
+        traces = trace.trace(
             simple_image,
             noise=0,
             noise_relative=0.15,
             manual=False,
         )
-        orders, column_range, heights = result
-        assert len(orders) == 0
+        assert len(traces) == 0
 
     @pytest.mark.unit
     def test_combined_thresholds(self, simple_image):
@@ -1061,18 +1048,17 @@ class TestNoiseThreshold:
         # Threshold = background * (1 + noise_relative) + noise
         #           = 1000 * 1.05 + 20 = 1070
         # Signal at 1100 > 1070, should detect
-        result = trace.trace(
+        traces = trace.trace(
             simple_image,
             noise=20,
             noise_relative=0.05,
             manual=False,
         )
-        orders, column_range, heights = result
-        assert len(orders) >= 1
+        assert len(traces) >= 1
 
         # Threshold = 1000 * 1.08 + 30 = 1110
         # Signal at 1100 < 1110, should NOT detect
-        result = trace.trace(
+        traces = trace.trace(
             simple_image,
             noise=30,
             noise_relative=0.08,
@@ -1299,20 +1285,118 @@ class TestTraceByGrouping:
         assert set(file_groups.keys()) == {"third1", "third2", "third3"}
 
 
-class TestPerOrderMissingFile:
-    """Tests for graceful handling of missing order_centers_file."""
+class TestTraceReturnsTraceObjects:
+    """Tests that trace() returns list[Trace] with proper attributes."""
+
+    @pytest.fixture
+    def simple_image(self):
+        """Create a simple test image with two horizontal orders."""
+        nrow, ncol = 200, 500
+        im = np.full((nrow, ncol), 1000.0)
+        # Two traces at rows 50 and 150
+        for row in range(48, 53):
+            im[row, :] = 1200.0
+        for row in range(148, 153):
+            im[row, :] = 1200.0
+        return im
 
     @pytest.mark.unit
-    def test_missing_order_centers_file_warns_and_continues(self, tmp_path, caplog):
-        """Test that missing order_centers_file logs warning and returns empty groups."""
-        import logging
+    def test_trace_returns_list_of_trace_objects(self, simple_image):
+        """Test that trace() returns list[Trace] not arrays."""
+        from pyreduce.trace_model import Trace as TraceData
 
+        result = trace.trace(simple_image, manual=False)
+
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert all(isinstance(t, TraceData) for t in result)
+
+    @pytest.mark.unit
+    def test_trace_objects_have_fiber_idx(self, simple_image):
+        """Test that returned Trace objects have fiber_idx set."""
+        result = trace.trace(simple_image, manual=False)
+
+        for t in result:
+            assert t.fiber_idx is not None
+            assert t.group is None  # Not yet grouped
+
+    @pytest.mark.unit
+    def test_trace_with_order_centers_assigns_m(self, simple_image):
+        """Test that order_centers parameter assigns m values."""
+        order_centers = {90: 50.0, 91: 150.0}
+
+        result = trace.trace(
+            simple_image,
+            manual=False,
+            order_centers=order_centers,
+        )
+
+        assert len(result) == 2
+        m_values = {t.m for t in result}
+        assert m_values == {90, 91}
+
+    @pytest.mark.unit
+    def test_trace_without_order_centers_assigns_sequential_m(self, simple_image):
+        """Without order_centers, traces get sequential m values."""
+        result = trace.trace(
+            simple_image,
+            manual=False,
+            order_centers=None,
+        )
+
+        m_values = sorted(t.m for t in result)
+        assert m_values == list(range(len(result)))
+        for t in result:
+            assert t.fiber_idx == 1
+
+
+class TestGroupFibers:
+    """Tests for the new group_fibers() function."""
+
+    @pytest.fixture
+    def sample_traces(self):
+        """Create sample Trace objects with fiber_idx set."""
+        from pyreduce.trace_model import Trace as TraceData
+
+        # 4 traces: 2 orders (m=90, 91), 2 fibers each
+        return [
+            TraceData(
+                m=90,
+                fiber_idx=1,
+                pos=np.array([0.0, 0.0, 100.0]),
+                column_range=(10, 990),
+            ),
+            TraceData(
+                m=90,
+                fiber_idx=2,
+                pos=np.array([0.0, 0.0, 120.0]),
+                column_range=(10, 990),
+            ),
+            TraceData(
+                m=91,
+                fiber_idx=1,
+                pos=np.array([0.0, 0.0, 200.0]),
+                column_range=(10, 990),
+            ),
+            TraceData(
+                m=91,
+                fiber_idx=2,
+                pos=np.array([0.0, 0.0, 220.0]),
+                column_range=(10, 990),
+            ),
+        ]
+
+    @pytest.mark.unit
+    def test_group_fibers_no_config(self, sample_traces):
+        """Test group_fibers with no config returns empty list."""
+        result = trace.group_fibers(sample_traces, None)
+
+        assert result == []
+
+    @pytest.mark.unit
+    def test_group_fibers_with_groups_center(self, sample_traces):
+        """Test group_fibers with groups config using center merge."""
         from pyreduce.instruments.models import FiberGroupConfig, FibersConfig
-
-        caplog.set_level(logging.WARNING)
-
-        traces = np.array([[0.0, 0.0, 100.0], [0.0, 0.0, 200.0]])
-        column_range = np.array([[10, 990], [10, 990]])
 
         config = FibersConfig(
             fibers_per_order=1,
@@ -1320,35 +1404,129 @@ class TestPerOrderMissingFile:
             groups={"A": FiberGroupConfig(range=(1, 2), merge="center")},
         )
 
-        # Should not raise, should warn
-        group_traces, group_cr, group_counts, group_heights = trace.organize_fibers(
-            traces,
-            column_range,
-            config,
-            instrument_dir=str(tmp_path),
-            channel="test",
-        )
+        result = trace.group_fibers(sample_traces, config)
 
-        # Should return empty groups
-        assert group_traces == {}
-        assert group_cr == {}
-        assert group_counts == {}
-
-        # Should have logged a warning
-        assert "Order centers file not found" in caplog.text
-        assert "Skipping fiber grouping" in caplog.text
+        # Should have 2 grouped traces (one per order)
+        assert len(result) == 2
+        for t in result:
+            assert t.group == "A"
+            assert t.fiber_idx is None
+            assert t.m in {90, 91}
 
     @pytest.mark.unit
-    def test_missing_order_centers_with_channel_template(self, tmp_path, caplog):
-        """Test missing file with {channel} template substitution."""
-        import logging
-
+    def test_group_fibers_with_groups_average(self, sample_traces):
+        """Test group_fibers with average merge method."""
         from pyreduce.instruments.models import FiberGroupConfig, FibersConfig
 
-        caplog.set_level(logging.WARNING)
+        config = FibersConfig(
+            groups={"A": FiberGroupConfig(range=(1, 3), merge="average")}
+        )
 
-        traces = np.array([[0.0, 0.0, 100.0]])
-        column_range = np.array([[10, 990]])
+        result = trace.group_fibers(sample_traces, config)
+
+        # Should have 2 grouped traces (one per order)
+        assert len(result) == 2
+
+        # Check that the average was computed (y position should be midpoint)
+        for t in result:
+            x_mid = 500
+            y = t.y_at_x(x_mid)
+            # Order 90: avg of 100 and 120 = 110; Order 91: avg of 200 and 220 = 210
+            if t.m == 90:
+                assert y == pytest.approx(110.0, abs=1.0)
+            else:
+                assert y == pytest.approx(210.0, abs=1.0)
+
+    @pytest.mark.unit
+    def test_group_fibers_preserves_m(self, sample_traces):
+        """Test that group_fibers preserves m values from input."""
+        from pyreduce.instruments.models import FiberGroupConfig, FibersConfig
+
+        config = FibersConfig(
+            groups={"A": FiberGroupConfig(range=(1, 3), merge="center")}
+        )
+
+        result = trace.group_fibers(sample_traces, config)
+
+        m_values = {t.m for t in result}
+        assert m_values == {90, 91}
+
+    @pytest.mark.unit
+    def test_group_fibers_clears_fiber_idx(self, sample_traces):
+        """Test that group_fibers sets fiber_idx to None."""
+        from pyreduce.instruments.models import FiberGroupConfig, FibersConfig
+
+        config = FibersConfig(
+            groups={"A": FiberGroupConfig(range=(1, 3), merge="center")}
+        )
+
+        result = trace.group_fibers(sample_traces, config)
+
+        for t in result:
+            assert t.fiber_idx is None
+
+    @pytest.mark.unit
+    def test_group_fibers_bundles(self):
+        """Test group_fibers with bundles config."""
+        from pyreduce.instruments.models import FiberBundleConfig, FibersConfig
+        from pyreduce.trace_model import Trace as TraceData
+
+        # 4 traces in one order, 2 fibers per bundle
+        traces = [
+            TraceData(
+                m=90,
+                fiber_idx=i,
+                pos=np.array([0.0, 0.0, 100.0 + i * 10]),
+                column_range=(10, 990),
+            )
+            for i in range(1, 5)
+        ]
+
+        config = FibersConfig(bundles=FiberBundleConfig(size=2, merge="center"))
+
+        result = trace.group_fibers(traces, config)
+
+        # Should have 2 bundles
+        groups = {t.group for t in result}
+        assert groups == {"bundle_1", "bundle_2"}
+
+
+class TestGroupedPlusRawTraces:
+    """Tests for the combined grouped+raw trace list behavior.
+
+    After Tracing.run() with fiber grouping, the result is grouped + raw_traces.
+    These tests verify that downstream selection and filtering work correctly
+    on such mixed lists.
+    """
+
+    @pytest.fixture
+    def mixed_traces(self):
+        """Simulate the output of Tracing.run() with fiber grouping.
+
+        Creates grouped traces (group set, fiber_idx=None) followed by
+        the original individual fiber traces (fiber_idx set, group=None).
+        """
+        from pyreduce.instruments.models import FiberGroupConfig, FibersConfig
+        from pyreduce.trace_model import Trace as TraceData
+
+        # 6 raw fiber traces: 2 orders x 3 fibers
+        raw = [
+            TraceData(
+                m=90,
+                fiber_idx=i,
+                pos=np.array([0.0, 0.0, 100.0 + i * 10]),
+                column_range=(10, 990),
+            )
+            for i in range(1, 4)
+        ] + [
+            TraceData(
+                m=91,
+                fiber_idx=i,
+                pos=np.array([0.0, 0.0, 200.0 + i * 10]),
+                column_range=(10, 990),
+            )
+            for i in range(1, 4)
+        ]
 
         config = FibersConfig(
             fibers_per_order=1,
@@ -1356,30 +1534,137 @@ class TestPerOrderMissingFile:
             groups={"A": FiberGroupConfig(range=(1, 2), merge="center")},
         )
 
-        group_traces, group_cr, group_counts, group_heights = trace.organize_fibers(
-            traces,
-            column_range,
-            config,
-            instrument_dir=str(tmp_path),
-            channel="R0",
-        )
-
-        # Should warn about the resolved filename
-        assert "order_centers_r0.yaml" in caplog.text
-        assert group_traces == {}
+        grouped = trace.group_fibers(raw, config)
+        # This is what Tracing.run() now produces
+        combined = grouped + raw
+        return combined, config
 
     @pytest.mark.unit
-    def test_inline_order_centers_works(self):
-        """Test that inline order_centers (no file) still works."""
+    def test_raw_traces_preserved_after_grouping(self, mixed_traces):
+        """Individual fiber traces are still present alongside grouped traces."""
+        combined, _ = mixed_traces
+
+        fiber_traces = [t for t in combined if t.fiber_idx is not None]
+        grouped_traces = [t for t in combined if t.group is not None]
+
+        assert len(fiber_traces) == 6  # 2 orders x 3 fibers
+        assert len(grouped_traces) == 4  # 2 orders x 2 groups
+        assert len(combined) == 10
+
+    @pytest.mark.unit
+    def test_grouped_traces_come_first(self, mixed_traces):
+        """Grouped traces precede individual fiber traces in the list."""
+        combined, _ = mixed_traces
+
+        first_fiber_idx = next(
+            i for i, t in enumerate(combined) if t.fiber_idx is not None
+        )
+        last_group_idx = max(i for i, t in enumerate(combined) if t.group is not None)
+        assert last_group_idx < first_fiber_idx
+
+    @pytest.mark.unit
+    def test_select_groups_excludes_fibers(self, mixed_traces):
+        """'groups' selection returns only grouped traces, not fiber traces."""
+        combined, config = mixed_traces
+
+        result = trace.select_traces_for_step(combined, config, "default")
+
+        all_traces = result["all"]
+        assert len(all_traces) == 4
+        assert all(t.group is not None for t in all_traces)
+        assert all(t.fiber_idx is None for t in all_traces)
+
+    @pytest.mark.unit
+    def test_select_named_groups_excludes_fibers(self, mixed_traces):
+        """List selection ['A', 'B'] returns only grouped traces."""
+        combined, config = mixed_traces
+
+        result = trace.select_traces_for_step(combined, config, "science")
+
+        assert set(result.keys()) == {"A", "B"}
+        all_selected = [t for group in result.values() for t in group]
+        assert len(all_selected) == 4
+        assert all(t.group is not None for t in all_selected)
+
+    @pytest.mark.unit
+    def test_select_per_fiber_excludes_groups(self, mixed_traces):
+        """'per_fiber' selection returns only fiber traces, not grouped."""
+        combined, config = mixed_traces
+        config = config.model_copy(update={"use": {"default": "per_fiber"}})
+
+        result = trace.select_traces_for_step(combined, config, "default")
+
+        all_selected = [t for group in result.values() for t in group]
+        assert len(all_selected) == 6
+        assert all(t.fiber_idx is not None for t in all_selected)
+
+    @pytest.mark.unit
+    def test_fiber_traces_retain_original_properties(self, mixed_traces):
+        """Individual fiber traces keep their m, fiber_idx, and positions."""
+        combined, _ = mixed_traces
+
+        fiber_traces = [t for t in combined if t.fiber_idx is not None]
+
+        m_values = {t.m for t in fiber_traces}
+        assert m_values == {90, 91}
+
+        fiber_indices = {t.fiber_idx for t in fiber_traces}
+        assert fiber_indices == {1, 2, 3}
+
+        # Check positions are distinct per fiber
+        m90_fibers = sorted(
+            [t for t in fiber_traces if t.m == 90], key=lambda t: t.fiber_idx
+        )
+        for i, t in enumerate(m90_fibers, start=1):
+            assert t.y_at_x(500) == pytest.approx(100.0 + i * 10, abs=0.1)
+
+    @pytest.mark.unit
+    def test_grouped_traces_have_no_fiber_idx(self, mixed_traces):
+        """Grouped traces have group set and fiber_idx cleared."""
+        combined, _ = mixed_traces
+
+        grouped = [t for t in combined if t.group is not None]
+        assert all(t.fiber_idx is None for t in grouped)
+        assert {t.group for t in grouped} == {"A", "B"}
+
+
+class TestSelectByFiberIndex:
+    """Tests for selecting individual fiber traces by numeric index."""
+
+    @pytest.fixture
+    def traces_with_fibers(self):
+        from pyreduce.trace_model import Trace as TraceData
+
+        return [
+            TraceData(
+                m=90,
+                fiber_idx=i,
+                pos=np.array([0.0, 0.0, 100.0 + i * 10]),
+                column_range=(10, 990),
+            )
+            for i in range(1, 4)
+        ]
+
+    @pytest.mark.unit
+    def test_select_fiber_by_index(self, traces_with_fibers):
+        """Numeric name in list selection matches fiber_idx."""
         from pyreduce.instruments.models import FiberGroupConfig, FibersConfig
 
-        traces = np.array(
-            [
-                [0.0, 0.0, 100.0],
-                [0.0, 0.0, 200.0],
-            ]
+        config = FibersConfig(
+            groups={"A": FiberGroupConfig(range=(1, 4))},
+            use={"science": ["2"]},
         )
-        column_range = np.array([[10, 990], [10, 990]])
+
+        result = trace.select_traces_for_step(traces_with_fibers, config, "science")
+
+        assert "2" in result
+        assert len(result["2"]) == 1
+        assert result["2"][0].fiber_idx == 2
+
+    @pytest.mark.unit
+    def test_select_fiber_index_no_match(self, traces_with_fibers):
+        """Numeric name that matches no fiber_idx warns and falls back."""
+        from pyreduce.instruments.models import FiberGroupConfig, FibersConfig
 
         config = FibersConfig(
             fibers_per_order=1,
@@ -1387,14 +1672,40 @@ class TestPerOrderMissingFile:
             groups={"A": FiberGroupConfig(range=(1, 2), merge="center")},
         )
 
-        group_traces, group_cr, group_counts, group_heights = trace.organize_fibers(
-            traces, column_range, config
+        result = trace.select_traces_for_step(traces_with_fibers, config, "science")
+
+        # Falls back to all traces
+        assert "all" in result
+
+    @pytest.mark.unit
+    def test_select_mixed_group_and_fiber_index(self):
+        """List with both group names and fiber indices works."""
+        from pyreduce.instruments.models import FiberGroupConfig, FibersConfig
+        from pyreduce.trace_model import Trace as TraceData
+
+        traces = [
+            TraceData(
+                m=90, group="A", pos=np.array([0.0, 0.0, 100.0]), column_range=(10, 990)
+            ),
+            TraceData(
+                m=90,
+                fiber_idx=5,
+                pos=np.array([0.0, 0.0, 150.0]),
+                column_range=(10, 990),
+            ),
+        ]
+
+        config = FibersConfig(
+            groups={"A": FiberGroupConfig(range=(1, 4))},
+            use={"science": ["A", "5"]},
         )
 
-        # Should work normally with inline order_centers
-        assert "A" in group_traces
-        assert 1 in group_traces["A"]
-        assert 2 in group_traces["A"]
+        result = trace.select_traces_for_step(traces, config, "science")
+
+        assert "A" in result
+        assert "5" in result
+        assert len(result["A"]) == 1
+        assert len(result["5"]) == 1
 
 
 class TestNaturalSortKey:

@@ -87,6 +87,7 @@ def main(
     skip_existing=False,
     plot=0,
     plot_dir=None,
+    use_groups=None,
 ):
     r"""
     Main entry point for REDUCE scripts.
@@ -157,6 +158,13 @@ def main(
     if isinstance(instrument, str):
         instrument = instruments.instrument_info.load_instrument(instrument)
     info = instrument.info
+
+    if use_groups is not None:
+        fibers = getattr(instrument.config, "fibers", None)
+        if fibers is not None:
+            fibers.use = {"default": use_groups}
+        else:
+            logger.warning("--use ignored: instrument has no fiber config")
 
     # load default settings from settings_pyreduce.json
     # $REDUCE_DATA overrides config for base_dir (but "" means use relative paths)
@@ -229,7 +237,7 @@ def main(
                 target=k.get("target"),
                 instrument=instrument,
                 channel=c,
-                night=k.get("night"),
+                night=k.get("night") or "",
                 config=config,
                 trace_range=trace_range,
                 steps=steps,
@@ -245,6 +253,40 @@ def main(
                     continue
                 raise
     return output
+
+
+def wavelengths_from_traces(traces: list, ncol: int = None) -> np.ndarray:
+    """Compute wavelength array from trace objects.
+
+    Parameters
+    ----------
+    traces : list[TraceData]
+        Trace objects with .wave polynomial coefficients set
+    ncol : int, optional
+        Number of columns. If not provided, uses max column_range.
+
+    Returns
+    -------
+    wlen : ndarray of shape (ntrace, ncol)
+        Wavelength for each pixel, or None if no wavelength data
+    """
+    if not traces:
+        return None
+
+    # Check if any trace has wavelength data
+    if not any(t.wave is not None for t in traces):
+        return None
+
+    # Determine ncol from traces if not provided
+    if ncol is None:
+        max_col = max(t.column_range[1] for t in traces)
+        ncol = int(2 ** np.ceil(np.log2(max_col)))  # Round up to power of 2
+
+    x = np.arange(ncol)
+    wlen = np.array(
+        [t.wlen(x) if t.wave is not None else np.full(ncol, np.nan) for t in traces]
+    )
+    return wlen
 
 
 class Step:
@@ -864,18 +906,28 @@ class Trace(CalibrationStep):
 
         logger.info("Tracing files: %s", files)
 
+        # Load order_centers for m assignment if available
+        order_centers = self._load_order_centers()
+
+        # Fall back to bundle_centers if no order_centers
+        if order_centers is None:
+            order_centers = self._load_bundle_centers()
+
         # Check if we should trace file groups separately
         fibers_config = getattr(self.instrument.config, "fibers", None)
         trace_by = getattr(fibers_config, "trace_by", None) if fibers_config else None
 
         if trace_by and len(files) > 1:
-            traces, column_range, heights = self._trace_by_groups(
-                files, mask, bias, trace_by
+            raw_traces = self._trace_by_groups(
+                files, mask, bias, trace_by, order_centers
             )
         else:
-            traces, column_range, heights = self._trace_single(files, mask, bias)
+            raw_traces = self._trace_single(files, mask, bias, order_centers)
 
-        self.heights = heights
+        # Store heights for backward compatibility
+        self.heights = np.array(
+            [t.height if t.height is not None else np.nan for t in raw_traces]
+        )
 
         # Organize fibers into groups if configured, then create Trace objects
         group_traces = None
@@ -917,7 +969,7 @@ class Trace(CalibrationStep):
 
         return self.trace_objects
 
-    def _trace_by_groups(self, files, mask, bias, trace_by):
+    def _trace_by_groups(self, files, mask, bias, trace_by, order_centers):
         """Trace files grouped by header value, then merge traces.
 
         Parameters
@@ -930,10 +982,13 @@ class Trace(CalibrationStep):
             Bias correction
         trace_by : str
             Header keyword to group files by
+        order_centers : dict[int, float] | None
+            Order centers for m assignment
 
         Returns
         -------
-        traces, column_range, heights : merged results from all groups
+        list[TraceData]
+            Merged traces from all groups
         """
         # Group files by header value
         file_groups = {}
@@ -953,41 +1008,61 @@ class Trace(CalibrationStep):
 
         # Trace each group
         all_traces = []
-        all_column_range = []
-        all_heights = []
         for group_key, group_files in file_groups.items():
             logger.info("Tracing group '%s': %d files", group_key, len(group_files))
-            traces, column_range, heights = self._trace_single(group_files, mask, bias)
+            traces = self._trace_single(group_files, mask, bias, order_centers)
             logger.info("  Found %d traces", len(traces))
-            all_traces.append(traces)
-            all_column_range.append(column_range)
-            all_heights.extend(heights if heights is not None else [])
+            all_traces.extend(traces)
 
-        # Merge traces from all groups
-        traces = np.vstack(all_traces)
-        column_range = np.vstack(all_column_range)
-        heights = np.array(all_heights) if all_heights else None
+        # Re-assign fiber_idx within each order by y-position, since
+        # each trace_by group assigned its own 1..N independently.
+        from collections import defaultdict
 
-        # Sort by y-position (trace constant term = y-intercept at x=0)
-        mid_x = traces.shape[1] // 2 if traces.shape[1] > 1 else 0
-        y_positions = np.polyval(traces[:, ::-1].T, mid_x)
-        sort_idx = np.argsort(y_positions)
-        traces = traces[sort_idx]
-        column_range = column_range[sort_idx]
-        if heights is not None:
-            heights = heights[sort_idx]
+        traces_by_m = defaultdict(list)
+        for t in all_traces:
+            traces_by_m[t.m].append(t)
 
-        logger.info(
-            "Merged %d total traces from %d groups", len(traces), len(file_groups)
+        for _m, order_traces in traces_by_m.items():
+            x_mid = sum(order_traces[0].column_range) / 2
+            order_traces.sort(key=lambda t: t.y_at_x(x_mid))
+            for idx, t in enumerate(order_traces, start=1):
+                t.fiber_idx = idx
+
+        # Recompute heights now that all groups are merged, so each trace
+        # sees its true nearest neighbor (not just within its trace_by group).
+        ncol = max(t.column_range[1] for t in all_traces)
+        x_mid = ncol // 2
+        all_traces.sort(key=lambda t: t.y_at_x(x_mid))
+        _compute_heights_inplace(all_traces, ncol)
+
+        # Sort by (m descending, fiber_idx)
+        all_traces.sort(
+            key=lambda t: (-t.m if t.m is not None else 0, t.fiber_idx or 0)
         )
 
-        return traces, column_range, heights
+        logger.info(
+            "Merged %d total traces from %d groups", len(all_traces), len(file_groups)
+        )
 
-    def _trace_single(self, files, mask, bias):
-        """Trace a single set of files."""
+        return all_traces
+
+    def _trace_single(self, files, mask, bias, order_centers):
+        """Trace a single set of files.
+
+        Returns
+        -------
+        list[TraceData]
+            Trace objects with fiber_idx set
+        """
         trace_img, ohead = self.calibrate(files, mask, bias, None)
 
-        traces, column_range, heights = mark_orders(
+        # Get fibers_per_order from instrument config for auto-pairing
+        fibers_config = getattr(self.instrument.config, "fibers", None)
+        fpo = (
+            getattr(fibers_config, "fibers_per_order", None) if fibers_config else None
+        )
+
+        traces = mark_orders(
             trace_img,
             min_cluster=self.min_cluster,
             min_width=self.min_width,
@@ -1008,9 +1083,11 @@ class Trace(CalibrationStep):
             sigma=self.sigma,
             plot=self.plot,
             plot_title=self.plot_title,
+            order_centers=order_centers,
+            fibers_per_order=fpo,
         )
 
-        return traces, column_range, heights
+        return traces
 
     def save(self, traces, column_range):
         """Save tracing results to disk in FITS format.
@@ -1294,6 +1371,10 @@ class NormalizeFlatField(Step):
         slitfunc_meta : dict
             Metadata for slitfunc (extraction_height, osample, trace_range)
         """
+        if flat is None or (isinstance(flat, tuple) and flat[0] is None):
+            logger.warning("No master flat available, skipping flat normalization")
+            return None
+
         flat, fhead = flat
 
         # Apply fiber selection based on instrument config
@@ -1424,10 +1505,7 @@ class WavelengthCalibrationMaster(CalibrationStep, ExtractionStep):
         bias=None,
         norm_flat=None,
     ):
-        """Perform wavelength calibration
-
-        This consists of extracting the wavelength image
-        and fitting a polynomial the the known spectral lines
+        """Extract wavelength calibration spectra, per fiber group.
 
         Parameters
         ----------
@@ -1486,7 +1564,7 @@ class WavelengthCalibrationMaster(CalibrationStep, ExtractionStep):
         logger.info("Created wavelength calibration spectrum file: %s", self.savefile)
 
     def load(self):
-        """Load master wavelength calibration from disk
+        """Load master wavelength calibration from disk.
 
         Returns
         -------
@@ -1509,39 +1587,71 @@ class WavelengthCalibrationInitialize(Step):
         self._dependsOn += ["wavecal_master"]
         self._loadDependsOn += ["config", "wavecal_master"]
 
-        #:tuple(int, int): Polynomial degree of the wavelength calibration in order, column direction
         self.degree = config["degree"]
-        #:float: wavelength range around the initial guess to explore
-        self.wave_delta = config["wave_delta"]
-        #:int: number of walkers in the MCMC
-        self.nwalkers = config["nwalkers"]
-        #:int: number of steps in the MCMC
-        self.steps = config["steps"]
-        #:float: resiudal range to accept as match between peaks and atlas in m/s
         self.resid_delta = config["resid_delta"]
-        #:str: element for the atlas to use
-        self.element = config["element"]
-        #:str: medium the medium of the instrument, air or vac
+        self.match_tolerance = config["match_tolerance"]
+        self.iterations = config["iterations"]
+        self.edge_margin = config["edge_margin"]
+        self.width_min = config["width_min"]
+        self.width_max = config["width_max"]
+        self.atlas_name = config["atlas"]
         self.medium = config["medium"]
-        #:float: Gaussian smoothing parameter applied to the observed spectrum in pixel scale, set to 0 to disable smoothing
         self.smoothing = config["smoothing"]
-        #:float: Minimum height of spectral lines in the normalized spectrum, values of 1 and above are interpreted as percentiles of the spectrum, set to 0 to disable the cutoff
         self.cutoff = config["cutoff"]
+
+    def savefile_for_group(self, group: str) -> str:
+        """Get savefile path for a specific group."""
+        if group == "all":
+            return join(self.output_dir, self.prefix + ".linelist.npz")
+        return join(self.output_dir, self.prefix + f"_{group}.linelist.npz")
 
     @property
     def savefile(self):
-        """str: Name of the wavelength echelle file"""
-        return join(self.output_dir, self.prefix + ".linelist.npz")
+        """str: Name of the linelist file (single-group compat)"""
+        return self.savefile_for_group("all")
 
     def run(self, wavecal_master):
         wavecal_spec, thead = wavecal_master
 
-        # Get the initial wavelength guess from the instrument
-        wave_range = self.instrument.get_wavelength_range(thead, self.channel)
-        if wave_range is None:
-            raise ValueError(
-                "This instrument is missing an initial wavelength guess for wavecal_init"
+        Parameters
+        ----------
+        wavecal_master : dict[str, tuple]
+            {group: (wavecal_spec, thead)} from wavecal_master step
+
+        Returns
+        -------
+        results : dict[str, LineList]
+            {group: linelist} for each fiber group
+        """
+        results = {}
+        for group, (wavecal_spec, thead) in wavecal_master.items():
+            logger.info("Running wavecal_init for group '%s'", group)
+
+            # Get the initial wavelength guess from the instrument
+            wave_range = self.instrument.get_wavelength_range(thead, self.channel)
+            if wave_range is None:
+                raise ValueError(
+                    "This instrument is missing an initial wavelength guess for wavecal_init"
+                )
+
+            module = WavelengthCalibrationInitializeModule(
+                plot=self.plot,
+                plot_title=f"{self.plot_title} [{group}]" if self.plot_title else group,
+                degree=self.degree,
+                resid_delta=self.resid_delta,
+                match_tolerance=self.match_tolerance,
+                iterations=self.iterations,
+                edge_margin=self.edge_margin,
+                width_min=self.width_min,
+                width_max=self.width_max,
+                atlas_name=self.atlas_name,
+                atlas_search_dirs=[self.instrument._inst_dir],
+                medium=self.medium,
+                smoothing=self.smoothing,
+                cutoff=self.cutoff,
             )
+            linelist = module.execute(wavecal_spec, wave_range)
+            results[group] = linelist
 
         module = WavelengthCalibrationInitializeModule(
             plot=self.plot,
@@ -1560,9 +1670,12 @@ class WavelengthCalibrationInitialize(Step):
         self.save(linelist)
         return linelist
 
-    def save(self, linelist):
-        linelist.save(self.savefile)
-        logger.info("Created wavelength calibration linelist file: %s", self.savefile)
+    def save(self, results: dict):
+        """Save linelists for each fiber group."""
+        for group, linelist in results.items():
+            savefile = self.savefile_for_group(group)
+            linelist.save(savefile)
+            logger.info("Created wavelength calibration linelist file: %s", savefile)
 
     def load(self, config, wavecal_master):
         _, thead = wavecal_master
@@ -1577,10 +1690,35 @@ class WavelengthCalibrationInitialize(Step):
                 thead, self.channel, **config["instrument"]
             )
 
-            # This should fail if there is no provided file by PyReduce
-            linelist = LineList.load(reference)
+        # First try to load custom linelists matching wavecal_master groups
+        for group in wavecal_master.keys():
+            savefile = self.savefile_for_group(group)
+            try:
+                linelist = LineList.load(savefile)
+                logger.info("Loaded linelist for group '%s': %s", group, savefile)
+                results[group] = linelist
+            except FileNotFoundError:
+                pass
+
+        # If we found custom linelists, use them
+        if results:
+            return results
+
+        # Otherwise, fall back to instrument-provided wavecal file
+        # (applies same linelist to all groups)
+        first_group = next(iter(wavecal_master.keys()))
+        _, thead = wavecal_master[first_group]
+        reference = self.instrument.get_wavecal_filename(
+            thead, self.channel, **config["instrument"]
+        )
+        linelist = LineList.load(reference)
         logger.info("Wavelength calibration linelist file: %s", reference)
-        return linelist
+
+        # Apply same linelist to all groups
+        for group in wavecal_master.keys():
+            results[group] = linelist
+
+        return results
 
 
 class WavelengthCalibrationFinalize(Step):
@@ -1588,7 +1726,7 @@ class WavelengthCalibrationFinalize(Step):
 
     def __init__(self, *args, **config):
         super().__init__(*args, **config)
-        self._dependsOn += ["wavecal_master", "wavecal_init"]
+        self._dependsOn += ["wavecal_master", "wavecal_init", "trace"]
 
         #:tuple(int, int): Polynomial degree of the wavelength calibration in order, column direction
         self.degree = config["degree"]
@@ -1606,29 +1744,36 @@ class WavelengthCalibrationFinalize(Step):
         self.correlate_cols = config["correlate_cols"]
         #:float: fraction of columns, to allow individual orders to shift
         self.shift_window = config["shift_window"]
-        #:str: elements of the spectral lamp
-        self.element = config["element"]
+        #:str: name of the line atlas
+        self.atlas_name = config["atlas"]
         #:str: medium of the detector, vac or air
         self.medium = config["medium"]
+
+    def savefile_for_group(self, group: str) -> str:
+        """Get savefile path for a specific group."""
+        if group == "all":
+            return join(self.output_dir, self.prefix + ".linelist.npz")
+        return join(self.output_dir, self.prefix + f"_{group}.linelist.npz")
 
     @property
     def savefile(self):
         """str: Name of the linelist file (shared with wavecal_init)"""
         return join(self.output_dir, self.prefix + ".linelist.npz")
 
-    def run(self, wavecal_master, wavecal_init):
-        """Perform wavelength calibration
+    def run(self, wavecal_master: dict, wavecal_init: dict, trace: list):
+        """Perform wavelength calibration for each fiber group.
 
-        This consists of extracting the wavelength image
-        and fitting a polynomial the the known spectral lines
+        Fits wavelength polynomials and updates trace objects in-place.
+        Returns linelists for diagnostics.
 
         Parameters
         ----------
-        wavecal_master : tuple
-            results of the wavecal_master step, containing the master wavecal image
-            and its header
-        wavecal_init : LineList
-            the initial LineList guess with the positions and wavelengths of lines
+        wavecal_master : dict[str, tuple]
+            {group: (wavecal_spec, thead)} from wavecal_master step
+        wavecal_init : dict[str, LineList]
+            {group: linelist} from wavecal_init step
+        trace : list[TraceData]
+            Trace objects to update with wavelength polynomials
 
         Returns
         -------
@@ -1708,7 +1853,9 @@ class WavelengthCalibrationFinalize(Step):
                 logger.warning("Could not update traces.fits with wavelength: %s", e)
 
     def load(self):
-        """Load the results of the wavelength calibration
+        """Load wavelength calibration linelists.
+
+        Wavelength data is stored in traces.fits, not returned here.
 
         Returns
         -------
@@ -1873,8 +2020,7 @@ class LaserFrequencyCombFinalize(Step):
 
     def __init__(self, *args, **config):
         super().__init__(*args, **config)
-        self._dependsOn += ["freq_comb_master", "wavecal"]
-        self._loadDependsOn += ["wavecal"]
+        self._dependsOn += ["freq_comb_master", "trace", "wavecal"]
 
         #:tuple(int, int): polynomial degree of the wavelength fit
         self.degree = config["degree"]
@@ -1886,13 +2032,10 @@ class LaserFrequencyCombFinalize(Step):
         #:int: Width of the peaks for finding them in the spectrum
         self.lfc_peak_width = config["lfc_peak_width"]
 
-    @property
-    def savefile(self):
-        """str: Name of the wavelength echelle file"""
-        return join(self.output_dir, self.prefix + ".comb.npz")
+    def run(self, freq_comb_master, trace: list, wavecal: dict):
+        """Improve the wavelength calibration with a laser frequency comb.
 
-    def run(self, freq_comb_master, wavecal):
-        """Improve the wavelength calibration with a laser frequency comb (or similar)
+        Updates trace objects in-place with improved wavelength polynomial.
 
         Parameters
         ----------
@@ -1934,9 +2077,8 @@ class LaserFrequencyCombFinalize(Step):
         np.savez(self.savefile, wlen=wlen)
         logger.info("Created frequency comb wavecal file: %s", self.savefile)
 
-    def load(self, wavecal):
-        """Load the results of the frequency comb improvement if possible,
-        otherwise just use the normal wavelength solution
+    def save(self, trace: list):
+        """Save updated traces to disk.
 
         Parameters
         ----------
@@ -1948,6 +2090,7 @@ class LaserFrequencyCombFinalize(Step):
         wlen : array of shape (ntrace, ncol)
             improved wavelength solution
         """
+        trace_file = join(self.output_dir, self.prefix + ".traces.fits")
         try:
             data = np.load(self.savefile, allow_pickle=True)
             logger.info("Frequency comb wavecal file: %s", self.savefile)
@@ -2342,7 +2485,7 @@ class ContinuumNormalization(Step):
 
     def __init__(self, *args, **config):
         super().__init__(*args, **config)
-        self._dependsOn += ["science", "freq_comb", "norm_flat"]
+        self._dependsOn += ["science", "norm_flat", "trace"]
         self._loadDependsOn += ["norm_flat", "science"]
 
     @property
@@ -2350,7 +2493,7 @@ class ContinuumNormalization(Step):
         """str: savefile name"""
         return join(self.output_dir, self.prefix + ".cont.npz")
 
-    def run(self, science, freq_comb, norm_flat):
+    def run(self, science, norm_flat, trace: list):
         """Determine the continuum to each observation
         Also splices the orders together
 
@@ -2362,6 +2505,8 @@ class ContinuumNormalization(Step):
             results from freq_comb step (or wavecal if those don't exist)
         norm_flat : tuple
             results from the normalized flatfield step
+        trace : list[TraceData]
+            Trace objects with wavelength polynomials
 
         Returns
         -------
@@ -2499,7 +2644,7 @@ class Finalize(Step):
 
     def __init__(self, *args, **config):
         super().__init__(*args, **config)
-        self._dependsOn += ["continuum", "freq_comb", "config"]
+        self._dependsOn += ["continuum", "trace", "config"]
         self.filename = config["filename"]
 
     def output_file(self, number, name):
@@ -2530,7 +2675,7 @@ class Finalize(Step):
                 head[f"HIERARCH {prefix} {key.upper()}"] = value
         return head
 
-    def run(self, continuum, freq_comb, config):
+    def run(self, continuum, trace: list, config):
         """Create the final output files
 
         this is includes:
@@ -2541,11 +2686,25 @@ class Finalize(Step):
         ----------
         continuum : tuple
             results from the continuum normalization
-        freq_comb : tuple
-            results from the frequency comb step (or wavelength calibration)
+        trace : list[TraceData]
+            Trace objects with wavelength polynomials
+        config : dict
+            Pipeline configuration
         """
         heads, specs, sigmas, conts, columns = continuum
-        wave = freq_comb
+
+        # Select same traces as science/continuum steps
+        selected = self._select_traces(trace, "science")
+        trace_list = [t for traces in selected.values() for t in traces]
+        if self.trace_range is not None:
+            trace_list = trace_list[self.trace_range[0] : self.trace_range[1]]
+        valid = [t for t in trace_list if not t.invalid]
+        nspec = specs[0].shape[0]
+        if len(valid) == nspec:
+            trace_list = valid
+        wave = wavelengths_from_traces(trace_list)
+        if wave is not None and len(wave) > nspec:
+            wave = wave[len(wave) - nspec :]
 
         fnames = []
         # Combine science with wavecal and continuum

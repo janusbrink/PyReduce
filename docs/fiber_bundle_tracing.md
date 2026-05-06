@@ -226,7 +226,16 @@ For groups/bundles, heights are derived from fiber spacing within each group (sp
 
 ## Example Instruments
 
-### ANDES_YJH (75 fibers x 18 orders)
+### ANDES_UBV / ANDES_RIZ (66 fibers per order)
+
+Simulated echelle spectrographs for visible wavelengths:
+- Fibers 1-31: Slit A
+- Fibers 33-35: Calibration
+- Fibers 36-66: Slit B
+- ANDES_UBV: channels U, B, V (selected by `BAND` header)
+- ANDES_RIZ: channels R, R1, R2, IZ (selected by `HDFMODEL` header, since R variants all have `BAND=R`)
+
+### ANDES_YJH (75 fibers per order)
 
 Simulated echelle with science fibers A/B and calibration fiber:
 - Fibers 1-35: Science fiber A

@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.13"
-# dependencies = ["pyreduce-astro>=0.7"]
-# ///
 """
 ANDES_RIZ instrument example: Step-by-step pipeline execution.
 
@@ -35,7 +31,7 @@ from pyreduce.pipeline import Pipeline
 instrument_name = "ANDES_RIZ"
 target = "psf_comp"
 night = ""
-channel = "R0"  # R0, R1, or R2 (different optical models)
+channel = "R"  # R, R1, R2 (different optical models), or IZ
 
 # Plot settings
 plot = int(os.environ.get("PYREDUCE_PLOT", "1"))
